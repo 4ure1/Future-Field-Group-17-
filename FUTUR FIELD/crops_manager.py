@@ -1,196 +1,207 @@
-import _json
-from datetime import datetime
-from models import CropsManager
+# Everything related to crops and harvests.
+
+from models import Crop, Production
+from file_handler import load_data, save_data, CROPS_FILE, MARKET_FILE, EXPENSES_FILE, thinLine
 
 
-class Crop:
-    def __init__ (self,name,season,area_hectares,production_tons,expenses,revenue,year):
-               self.name
-               self.season
-               self.area_hectares=area_hectares
-               self.production_tons=production_tons
-               self.expenses=expenses
-               self.revenue=revenue
-               self.year=year
-    
-    def calculate_yield(self):
-        if self.area_hectares==0:
-            return 0
-        return self.production_tons / self.area_hectares
-    
-    def calculate_profit(self):
-        return self.revenue - self.expenses
+def get_market_price(crop_name):
+    # finding of crop price in the database
+    prices = load_data(MARKET_FILE)
+    for p in prices:
+        if p["product_name"].lower() == crop_name.lower():
+            return p["current_price"]
+    return None
 
-    def to_dict(self):
-        return {
-            "name":self.Name,
-            "season":self.season,
-            "area_hectares":self.area_hectares,
-            "production_tons":self.production_tons,
-            "expenses":self.expenses,
-            "revenue":self.revenue,
-            "year":self.year
-        }
-    
-    
-class CropsManager:
-    def __init__(self,file_name="crops_data.json"):
-        self.file_name = file_name
-        self.crops = []
-        self.load_data()
 
-    def add_crop(self):
-        print("\n=== Add New Crop ===")
-        name = input("Crop name: ")
-        season = input("Season: ")
-        area_hectares = float(input("Area(hectares): "))
-        production_tons = float(input("Production (tons): "))
-        expenses = float(input("Expenses: "))
-        revenue = float(input("Revenue"))
-        year = int(input("Year: "))
+def get_total_expenses():
+    # Calculation of user total expenses
+    expenses = load_data(EXPENSES_FILE)
+    total = 0.0
+    for e in expenses:
+        total += e["amount"]
+    return total
 
-        crop = Crop(name,season,area_hectares,production_tons,expenses,year)
-        self.crops.append(crop)
-        self.save_data()
-        print("Crop added successfully.\n")
 
-    def display_crops(self):
-        print("\n=== Crop Records ===")
-        if not self.crops:
-            print("No crop records found.\n")
-            return
-        
-        for index , crop in enumerate(self.crops, start=1):
-            print(f"\nRecord #{index}")
-            print(f"Crop Name       : {crop.name}")
-            print(f"Season          : {crop.season}")
-            print(f"Year            : {crop.year}")
-            print(f"Area            : {crop.area_hectares} hectares")
-            print(f"Production      : {crop.production_tons} tons")
-            print(f"Yield           : {crop.calculate_yield():.2f} tons/hectare")
-            print(f"Expenses           : {crop.expenses}")
-            print(f"Revenue           : {crop.revenue}")
-            print(f"Profit          : {crop.calculate_profit()}")
-        print()
+def add_crop():
+    #add new crop
+    print(f"\n{thinLine}")
+    print("  ADD A NEW CROP")
+    print(thinLine)
 
-    def compare_years(self):
-        print("\n=== Year Comparaison ===")
-        if len(self.crops) < 2:
-            print("Not enough data to compare years.\n")
-            return
+    name = input("  Crop name (e.g. Maize) : ")
 
-        years = sorted(set(crop.year for crop in self.crops))
+    print("  Crop type :")
+    for i, t in enumerate(Crop.TYPES, 1):
+        print(f"    [{i}] {t}")
 
-        for year in years:
-            yearly_crops = [crop for crop in self.crops if crop.year == year]
-            total_production = sum(crop.production_tons for crop in yearly_crops)
-            total_profit = sum(crop.calculate_profit() for crop in yearly_crops)
-            average_yiel = (
-                sum(crop.calculate_yield() for crop in yearly_crops) / len(yearly_crops)
+    choice = input("  Your choice : ")
+    try:
+        crop_type = Crop.TYPES[int(choice) - 1]
+    except (ValueError, IndexError):
+        crop_type = "other"
+
+    area         = input("  Area (hectares) : ")
+    plant_date   = input("  Planting date (DD/MM/YYYY) : ")
+    harvest_date = input("  Expected harvest date (DD/MM/YYYY) : ")
+
+    new_crop = Crop(name, crop_type, float(area), plant_date, harvest_date)
+
+    crops = load_data(CROPS_FILE)
+    crops.append(new_crop.to_dict())
+    save_data(CROPS_FILE, crops)
+
+    print(f"\n  '{name}' added successfully.")
+
+
+def add_production():
+    # Harvest record
+    print(f"\n{thinLine}")
+    print("  RECORD A HARVEST")
+    print(thinLine)
+
+    crops = load_data(CROPS_FILE)
+
+    if len(crops) == 0:
+        print("  No crops yet.")
+        return
+
+    print("  Pick a crop :")
+    for i, c in enumerate(crops, 1):
+        print(f"  [{i}] {c['name']} ({c['area_hectares']} ha)")
+
+    choice = input("  Your choice : ")
+    try:
+        selected = crops[int(choice) - 1]
+    except (ValueError, IndexError):
+        print("  Invalid choice.")
+        return
+
+    year     = input("  Year (e.g. 2026) : ")
+    quantity = input("  Quantity produced (kg) : ")
+    expected = input("  Target quantity (kg) : ")
+
+    prod = Production(
+        selected["name"], year,
+        float(quantity), float(expected),
+        selected["area_hectares"]
+    )
+
+    # attach the production to the right crop
+    for c in crops:
+        if c["name"] == selected["name"]:
+            c["production"] = prod.to_dict()
+            break
+
+    save_data(CROPS_FILE, crops)
+    print(f"\n  {prod.get_info()}")
+
+    # show estimated profit if we have a market price
+    price = get_market_price(selected["name"])
+    if price is not None:
+        total_expenses = get_total_expenses()
+        estimated = prod.get_estimated_profit(price, total_expenses)
+        gross     = prod.quantity_produced * price
+        print(f"\n  --- ESTIMATED PROFIT ---")
+        print(f"  Market price    : {price} FCFA/kg")
+        print(f"  Gross revenue   : {gross} FCFA")
+        print(f"  Total expenses  : {total_expenses} FCFA")
+        print(f"  Estimated profit: {estimated} FCFA")
+        print(f"  Result          : {'Profitable' if estimated >= 0 else 'Loss'}")
+    else:
+        print("  (No market price found — add one in Market to see profit estimate)")
+
+
+def list_crops():
+    # Listing of all the crops if there are some
+    print(f"\n{thinLine}")
+    print("  MY CROPS")
+    print(thinLine)
+
+    crops = load_data(CROPS_FILE)
+
+    if len(crops) == 0:
+        print("  No crops yet.")
+        return
+
+    for c in crops:
+        crop_obj = Crop(
+            c["name"], c["crop_type"],
+            c["area_hectares"], c["plant_date"], c["harvest_date"]
+        )
+        print(f"  {crop_obj.get_info()}")
+
+        if c["production"] is not None:
+            p        = c["production"]
+            prod_obj = Production(
+                p["crop_name"], p["year"],
+                p["quantity_produced"], p["expected_quantity"],
+                p["area_hectares"]
             )
-            print(f"\nYear: {year}")
-            print(f"Total Production : {total_production:.2f} tons")
-            print(f"Average Yield    : {average_yiel:.2f} tons/hectare")
-            print(f"Total Profit : {total_profit:.2f}")
-            print()
-    
-    def search_crop(self):
-        print("\n=== Search Crop ===")
-        search_name = input("Entrer crop name").lower()
-        found = False
+            print(f"    -> {prod_obj.get_info()}")
 
-        for crop in self.crops:
-            if crop.name.lower() == search_name:
-                found = True
-                print(f"\nCrop Name  :{crop.name}")
-                print(f"Season  :{crop.season}")
-                print(f"Year  :{crop.year}")
-                print(f"Yield  :{crop.calculate_yield():.2f}")
-                print(f"Profit  :{crop.calculate_profit():.2f}")
-        if not found:
-            print("Crop not found.")
-        print()
-
-    def save_data(self):
-        data = [crop.to_dict() for crop in self.crops]
-        with open(self.file_name, "r") as file:
-            data = _json.__load(file)
-            for item in data:
-                crop = Crop(
-                    item["name"],
-                    item["season"],
-                    item["area_hectares"],
-                    item["production_tons"],
-                    item["expenses"],
-                    item["revenue"],
-                    item["year"],
-                )
-                self.crops = []
-
-    def generate_report(self):
-        print("\n=== Farm Report ===")
-        total_crops = len(self.crops)
-        total_production = sum(crop.production_tons for crop in self.crops)
-        total_profit = sum(crop.calculate_profit() for crop in self.crops)
-
-        print(f"Generated On      : {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"Total REcords     : {total_crops}")
-        print(f"Total Production  : {total_production:.2f} tons")
-        print(f"Total Profit     : {total_profit:.2f}")
-        print()
+            price = get_market_price(c["name"])
+            if price is not None:
+                expenses  = get_total_expenses()
+                estimated = prod_obj.get_estimated_profit(price, expenses)
+                print(f"    -> Estimated profit: {estimated} FCFA")
 
 
-# ========================== Main Program ==========================
+def check_alerts():
+    # Checking if you are in profit or loss
+    print(f"\n{thinLine}")
+    print("  PRODUCTION ALERTS")
+    print(thinLine)
 
-    def display_menu():
-        print("========== Agricultural Management System ==========")
-        print("1. Add Crop")
-        print("2. Display All Crops")
-        print("3. search Crop")
-        print("4. Compare Performance by Year")
-        print("5. Generate Farm Report")
-        print("6. Exit")
+    crops  = load_data(CROPS_FILE)
+    alerts = []
 
-    
-    manager = CropsManager()
+    for c in crops:
+        if c["production"] is not None:
+            p        = c["production"]
+            prod_obj = Production(
+                p["crop_name"], p["year"],
+                p["quantity_produced"], p["expected_quantity"],
+                p["area_hectares"]
+            )
+            rate = prod_obj.get_achievement_rate()
 
+            if rate < 70:
+                alerts.append(f"  WARNING : {c['name']} — only {rate}% of target reached!")
+            elif rate < 100:
+                alerts.append(f"  NOTICE  : {c['name']} — {rate}% of target reached.")
+
+    if len(alerts) == 0:
+        print("  No alerts. EverythinLineg looks fine.")
+    else:
+        for alert in alerts:
+            print(alert)
+
+
+def crops_menu():
     while True:
-        display_menu()
-        choice = input("\nEntrer your choice: ")
+        print(f"\n{thinLine}")
+        print("  CROP MANAGEMENT")
+        print(thinLine)
+        print("  [1] Add a crop")
+        print("  [2] Record a harvest")
+        print("  [3] View all crops")
+        print("  [4] Production alerts")
+        print("  [5] Back")
+
+        choice = input("\n  Your choice : ")
 
         if choice == "1":
-            manager.add_crop()
-        elif choice =="2":
-            manager.display_crops()
-        elif choice =="3":
-            manager.search_crop()
+            add_crop()
+        elif choice == "2":
+            add_production()
+        elif choice == "3":
+            list_crops()
         elif choice == "4":
-            manager.compare_years()
+            check_alerts()
         elif choice == "5":
-            manager.generate_report()
-        elif choice == "6":
-            print("Exiting system...")
             break
         else:
-            print("Invalid choice. Please try again.\n")
-
-
-
-                    
-
-
-
-
-
-
-           
-           
-           
-    
-
-
-
-        
+            print("  Invalid choice.")
 
 
 
